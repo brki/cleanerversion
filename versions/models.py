@@ -26,6 +26,7 @@ from django.db.models.fields.related import ForeignKey, ReverseSingleRelatedObje
     ForeignRelatedObjectsDescriptor
 from django.db.models.query import QuerySet, ValuesListQuerySet, ValuesQuerySet
 from django.db.models.signals import post_init
+from django.db.models.sql import Query
 from django.utils.functional import cached_property
 from django.utils.timezone import utc
 from django.utils import six
@@ -141,6 +142,37 @@ class VersionManager(models.Manager):
         kwargs['version_birth_date'] = timestamp
         return super(VersionManager, self).create(**kwargs)
 
+class VersionedQuery(Query):
+
+    def __init__(self, *args, **kwargs):
+        super(VersionedQuery, self).__init__(*args, **kwargs)
+        self.query_as_of_time = None
+
+    def clone(self, *args, **kwargs):
+        obj = super(VersionedQuery, self).clone(*args, **kwargs)
+        obj.query_as_of_time = self.query_as_of_time
+        return obj
+
+    def get_compiler(self, *args, **kwargs):
+        aliases_used = [k for k,v in self.alias_refcount.iteritems() if v>0]
+
+        where_clauses = []
+        params = []
+        for alias in aliases_used:
+            if self.query_as_of_time:
+                # There was a query_time set on the current VersionedQuerySet (self), so propagate it
+                where_clauses.append(
+                    '''{alias}.version_start_date <= %s
+                        AND ({alias}.version_end_date > %s OR {alias}.version_end_date is NULL )
+                    '''.format(alias=alias))
+                params += [self.query_as_of_time, self.query_as_of_time]
+            else:
+                # There was no query time set, so look for "current" entries
+                where_clauses.append("{0}.version_end_date is NULL".format(alias))
+
+        self.add_extra(None, None, where_clauses, params, None, None)
+        return super(VersionedQuery, self).get_compiler(*args, **kwargs)
+
 
 class VersionedQuerySet(QuerySet):
     """
@@ -152,8 +184,11 @@ class VersionedQuerySet(QuerySet):
 
     query_time = None
 
-    def __init__(self, *args, **kwargs):
-        super(VersionedQuerySet, self).__init__(*args, **kwargs)
+    def __init__(self, model=None, query=None, using=None, hints=None):
+
+        if not query:
+            query = VersionedQuery(model)
+        super(VersionedQuerySet, self).__init__(model=model, query=query, using=using, hints=hints)
 
         self.related_table_in_filter = set()
         """We will store in it all the tables we have being using in while filtering."""
@@ -241,6 +276,7 @@ class VersionedQuerySet(QuerySet):
         :param qtime: The UTC date and time; if None then use the current state (where version_end_date = NULL)
         :return: A VersionedQuerySet
         """
+        self.query.query_as_of_time = qtime
         return self.add_as_of_filter(qtime)
 
     def add_as_of_filter(self, querytime):
