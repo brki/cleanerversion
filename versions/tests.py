@@ -357,15 +357,15 @@ class MultiM2MToSameTest(TestCase):
 
     def test_filtering_on_the_other_side_of_relation(self):
         language_pupils_count = Pupil.objects.as_of(self.t0).filter(
-            language_teachers__name='Ms. Sue').propagate_querytime().count()
+            language_teachers__name='Ms. Sue').count()
         self.assertEqual(0, language_pupils_count)
 
         language_pupils_count = Pupil.objects.as_of(self.t1).filter(
-            language_teachers__name='Ms. Sue').propagate_querytime().count()
+            language_teachers__name='Ms. Sue').count()
         self.assertEqual(1, language_pupils_count)
 
         language_pupils_count = Pupil.objects.as_of(self.t2).filter(
-            language_teachers__name='Ms. Sue').propagate_querytime().count()
+            language_teachers__name='Ms. Sue').count()
         self.assertEqual(0, language_pupils_count)
 
     def test_t0(self):
@@ -972,20 +972,20 @@ class OneToManyTest(TestCase):
         self.assertEqual(1, Player.objects.as_of(t1).filter(name='p2.v1').all().count())
 
         # at t1 there should be one team with two players
-        p1 = Team.objects.as_of(t1).filter(player__name='p1.v1').propagate_querytime().first()
+        p1 = Team.objects.as_of(t1).filter(player__name='p1.v1').first()
         self.assertIsNotNone(p1)
-        p2 = Team.objects.as_of(t1).filter(player__name='p2.v1').propagate_querytime().first()
+        p2 = Team.objects.as_of(t1).filter(player__name='p2.v1').first()
         self.assertIsNotNone(p2)
 
         # at t2 there should be one team with one single player called 'p1.v1'
-        p1 = Team.objects.as_of(t2).filter(player__name='p1.v1').propagate_querytime().first()
-        p2 = Team.objects.as_of(t2).filter(player__name='p2.v1').propagate_querytime().first()
+        p1 = Team.objects.as_of(t2).filter(player__name='p1.v1').first()
+        p2 = Team.objects.as_of(t2).filter(player__name='p2.v1').first()
         self.assertIsNotNone(p1)
         self.assertIsNone(p2)
 
         # at t3 there should be one team with no players
-        p1 = Team.objects.as_of(t3).filter(player__name='p1.v1').propagate_querytime().first()
-        p2 = Team.objects.as_of(t3).filter(player__name='p2.v1').propagate_querytime().first()
+        p1 = Team.objects.as_of(t3).filter(player__name='p1.v1').first()
+        p2 = Team.objects.as_of(t3).filter(player__name='p2.v1').first()
         self.assertIsNone(p1)
         self.assertIsNone(p2)
 
@@ -1216,7 +1216,7 @@ class ManyToManyFilteringTest(TestCase):
         information across all tables
         """
         should_be_c1 = C1.objects.as_of(self.t1) \
-            .filter(c2s__name__startswith='c2').propagate_querytime().first()
+            .filter(c2s__name__startswith='c2').first()
         self.assertIsNotNone(should_be_c1)
 
     def test_filtering_one_jump_reverse(self):
@@ -1234,7 +1234,7 @@ class ManyToManyFilteringTest(TestCase):
         direction
         """
         should_be_c3 = C3.objects.as_of(self.t1) \
-            .filter(c2s__name__startswith='c2').propagate_querytime().first()
+            .filter(c2s__name__startswith='c2').first()
         self.assertIsNotNone(should_be_c3)
         self.assertEqual(should_be_c3.name, 'c3.v1')
 
@@ -1253,12 +1253,12 @@ class ManyToManyFilteringTest(TestCase):
         """
         with self.assertNumQueries(2) as counter:
             should_be_c1 = C1.objects.as_of(self.t1) \
-                .filter(c2s__c3s__name__startswith='c3').propagate_querytime().first()
+                .filter(c2s__c3s__name__startswith='c3').first()
             self.assertIsNotNone(should_be_c1)
             self.assertEqual(should_be_c1.name, 'c1.v1')
 
             count = C1.objects.as_of(self.t1) \
-                .filter(c2s__c3s__name__startswith='c3').propagate_querytime().all().count()
+                .filter(c2s__c3s__name__startswith='c3').all().count()
             self.assertEqual(1, count)
 
     def test_filtering_two_jumps_with_version_at_t2(self):
@@ -1268,11 +1268,11 @@ class ManyToManyFilteringTest(TestCase):
         """
         with self.assertNumQueries(2) as counter:
             should_be_c1 = C1.objects.as_of(self.t2) \
-                .filter(c2s__c3s__name__startswith='c3a').propagate_querytime().first()
+                .filter(c2s__c3s__name__startswith='c3a').first()
             self.assertIsNotNone(should_be_c1)
 
             count = C1.objects.as_of(self.t2) \
-                .filter(c2s__c3s__name__startswith='c3').propagate_querytime().all().count()
+                .filter(c2s__c3s__name__startswith='c3').all().count()
             self.assertEqual(2, count)
 
     def test_filtering_two_jumps_reverse(self):
@@ -1292,12 +1292,12 @@ class ManyToManyFilteringTest(TestCase):
         """
         with self.assertNumQueries(2) as counter:
             should_be_c3 = C3.objects.as_of(self.t1). \
-                filter(c2s__c1s__name__startswith='c1').propagate_querytime().first()
+                filter(c2s__c1s__name__startswith='c1').first()
             self.assertIsNotNone(should_be_c3)
             self.assertEqual(should_be_c3.name, 'c3.v1')
 
             count = C3.objects.as_of(self.t1) \
-                .filter(c2s__c1s__name__startswith='c1').propagate_querytime().all().count()
+                .filter(c2s__c1s__name__startswith='c1').all().count()
             self.assertEqual(1, count)
 
     def test_filtering_two_jumps_reverse_with_version_at_t2(self):
@@ -1308,9 +1308,9 @@ class ManyToManyFilteringTest(TestCase):
         """
         with self.assertNumQueries(2) as counter:
             should_be_c3 = C3.objects.as_of(self.t2) \
-                .filter(c2s__c1s__name__startswith='c1').propagate_querytime().first()
+                .filter(c2s__c1s__name__startswith='c1').first()
             self.assertIsNotNone(should_be_c3)
 
             count = C3.objects.as_of(self.t2) \
-                .filter(c2s__c1s__name__startswith='c1').propagate_querytime().all().count()
+                .filter(c2s__c1s__name__startswith='c1').all().count()
             self.assertEqual(2, count)

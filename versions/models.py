@@ -147,20 +147,28 @@ class VersionedQuery(Query):
     def __init__(self, *args, **kwargs):
         super(VersionedQuery, self).__init__(*args, **kwargs)
         self.query_as_of_time = None
+        self.apply_query_as_of_time = False
 
     def clone(self, *args, **kwargs):
         obj = super(VersionedQuery, self).clone(*args, **kwargs)
         obj.query_as_of_time = self.query_as_of_time
+        obj.apply_query_as_of_time = self.apply_query_as_of_time
         return obj
 
     def get_compiler(self, *args, **kwargs):
-        aliases_used = [k for k,v in self.alias_refcount.iteritems() if v>0]
+        # Wait! One more thing before returning the compiler: propagate the query time to all the related table aliases.
+        if self.apply_query_as_of_time:
+            self.propagate_query_time()
+        return super(VersionedQuery, self).get_compiler(*args, **kwargs)
+
+    def propagate_query_time(self):
+        self_alias = self.model._meta.db_table
+        aliases_used = [k for k,v in self.alias_refcount.iteritems() if v>0 and k != self_alias]
 
         where_clauses = []
         params = []
         for alias in aliases_used:
             if self.query_as_of_time:
-                # There was a query_time set on the current VersionedQuerySet (self), so propagate it
                 where_clauses.append(
                     '''{alias}.version_start_date <= %s
                         AND ({alias}.version_end_date > %s OR {alias}.version_end_date is NULL )
@@ -169,10 +177,7 @@ class VersionedQuery(Query):
             else:
                 # There was no query time set, so look for "current" entries
                 where_clauses.append("{0}.version_end_date is NULL".format(alias))
-
         self.add_extra(None, None, where_clauses, params, None, None)
-        return super(VersionedQuery, self).get_compiler(*args, **kwargs)
-
 
 class VersionedQuerySet(QuerySet):
     """
@@ -184,11 +189,11 @@ class VersionedQuerySet(QuerySet):
 
     query_time = None
 
-    def __init__(self, model=None, query=None, using=None, hints=None):
+    def __init__(self, model=None, query=None, *args, **kwargs):
 
         if not query:
             query = VersionedQuery(model)
-        super(VersionedQuerySet, self).__init__(model=model, query=query, using=using, hints=hints)
+        super(VersionedQuerySet, self).__init__(model=model, query=query, *args, **kwargs)
 
         self.related_table_in_filter = set()
         """We will store in it all the tables we have being using in while filtering."""
@@ -277,6 +282,7 @@ class VersionedQuerySet(QuerySet):
         :return: A VersionedQuerySet
         """
         self.query.query_as_of_time = qtime
+        self.query.apply_query_as_of_time = True
         return self.add_as_of_filter(qtime)
 
     def add_as_of_filter(self, querytime):
@@ -296,147 +302,6 @@ class VersionedQuerySet(QuerySet):
         else:
             filter = Q(version_end_date__isnull=True)
         return self.filter(filter)
-
-    def propagate_querytime(self, relation_table=None):
-        """
-        Propagate the query_time information found on the VersionedQuerySet
-        object to the given table or on table on which we have filtered on.
-
-        When relation_table is given it will be used and a clause will be
-        added to the generated query so that the matching object found on the
-        given relation_table will be restricted to the query_time specified
-        on the QuerySet. This usage is only use in the VersionManyRelatedManager.
-
-        When relation_table is not given then the function will use the list
-        of table we have build while using the filter(). Every time we
-        use filter() to filter on the other side of a relation we gather the tables
-        on which we have filtered (see _filter_or_exclude()). This list is then
-        used by propagate_querytime() to add to the QuerySet where clauses
-        restricting the matching records to the one that were active at the
-        query_time specified on the QuerySet.
-
-        :param relation_table: name of table to apply the limit on.
-        """
-        if relation_table:
-            relation_tables = [relation_table]
-        else:
-            relation_tables = self.related_table_in_filter
-
-        query_time = self.query_time
-        where_clauses = []
-        params = []
-        for relation_table in relation_tables:
-            if query_time:
-                # There was a query_time set on the current VersionedQuerySet (self), so propagate it
-                where_clauses.append(
-                    '''{table}.version_start_date <= %s
-                        AND ({table}.version_end_date > %s OR {table}.version_end_date is NULL )
-                    '''.format(table=relation_table))
-                params += [query_time, query_time]
-            else:
-                # There was no query_time set on the current VersionedQuerySet (self), so look for "current" entries
-                where_clauses.append("{0}.version_end_date is NULL".format(relation_table))
-
-        return self.extra(where=where_clauses, params=params)
-
-    def _filter_or_exclude(self, negate, *args, **kwargs):
-        queryset = super(VersionedQuerySet, self)._filter_or_exclude(negate, *args, **kwargs)
-        model_class = self.model
-
-        def path_stack_to_tables(model_class, paths_stack, tables=None):
-            """
-            Recursive function that will navigate the tables found in 'paths_stack'
-            and build up a list of all the tables we have visited.
-
-            The found tables are gathered in the collector variable 'tables' which
-            is initially empty on the first call.
-
-            On each recursive call we pop from 'paths_stack' until there is no more
-            tables to navigate.
-
-            The 'paths_stack' is created by exploding a filter expression on the
-            lookup separator, dropping the last item of the expression and then
-            reversing the obtained list.
-
-            Example:
-                filter expression: student__professor__name__startswith
-                after exploding: ['student', 'professor', 'name']
-                paths_stack: ['name', 'professor', 'student']
-            """
-            if not tables:
-                tables = []
-
-            attribute = paths_stack.pop()
-            try:
-                field_object, model, direct, m2m = model_class._meta.get_field_by_name(attribute)
-
-                # This is the counter part of one-to-many field
-                if not direct:
-                    table_name = field_object.model._meta.db_table
-                    tables.append(table_name)
-
-                if m2m:
-                    if isinstance(field_object, VersionedManyToManyField):
-                        table_name = field_object.m2m_db_table()
-                    else:
-                        table_name = field_object.field.m2m_db_table()
-
-                    tables.append(table_name)
-
-                if isinstance(field_object, VersionedForeignKey):
-                    table_name = field_object.rel.to._meta.db_table
-                    tables.append(table_name)
-
-            except FieldDoesNotExist:
-                # Of course in some occasion the filed might not be found,
-                # that's accepted
-                pass
-
-            if not paths_stack:
-                return tables
-            else:
-                if isinstance(field_object, VersionedManyToManyField)\
-                        or isinstance(field_object, VersionedForeignKey):
-                    model_class = field_object.rel.to
-                else:
-                    model_class = field_object.model
-
-                return path_stack_to_tables(model_class, paths_stack, tables)
-
-        def flatten_Q(q, expressions):
-            """
-            Recursive function that flattens the tree of Q nodes into a list
-            of filtering expressions.
-
-            For each Q node we visit its children. If the children is a tuple
-            we have reach the bottom of the tree and we read the first element
-            of the tuple (which is the filtering expression). If the children
-            is a Q node we recursively walk down on it.
-            """
-            for c in q.children:
-                if isinstance(c, tuple):
-                    expressions.append(c[0])
-                else:
-                    e = flatten_Q(c, expressions)
-                    expressions.extend(e)
-                    return expressions
-
-            return expressions
-
-        filter_expression_list = []
-
-        for q in args:
-            filter_expression_list.extend(flatten_Q(q, []))
-
-        filter_expression_list.extend(list(kwargs))
-
-        for filter_expression in filter_expression_list:
-            paths_stack = list(reversed(filter_expression.split(LOOKUP_SEP)[:-1]))
-            if paths_stack:
-                tables = path_stack_to_tables(model_class, paths_stack)
-                queryset.related_table_in_filter = queryset.related_table_in_filter.union(tables)
-
-        return queryset
 
     def values_list(self, *fields, **kwargs):
         """
@@ -648,10 +513,7 @@ def create_versioned_many_related_manager(superclass, rel):
             """
 
             queryset = super(VersionedManyRelatedManager, self).get_queryset()
-            if self.instance.as_of is not None:
-                queryset = queryset.as_of(self.instance.as_of)
-
-            return queryset.propagate_querytime(self.through._meta.db_table)
+            return queryset.as_of(self.instance.as_of)
 
         def _remove_items(self, source_field_name, target_field_name, *objs):
             """
