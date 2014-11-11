@@ -141,6 +141,11 @@ class VersionManager(models.Manager):
         return super(VersionManager, self).create(**kwargs)
 
 class VersionedQuery(Query):
+    """
+    VersionedQuery has awareness of the query time restrictions.  When the query is compiled,
+    this query time information is passed along to the foreign keys involved in the query, so
+    that they can provide that information when building the sql.
+    """
 
     def __init__(self, *args, **kwargs):
         super(VersionedQuery, self).__init__(*args, **kwargs)
