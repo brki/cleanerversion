@@ -144,14 +144,22 @@ class VersionedQuery(Query):
 
     def __init__(self, *args, **kwargs):
         super(VersionedQuery, self).__init__(*args, **kwargs)
-        self.query_as_of_time = None
-        self.apply_query_as_of_time = False
+        self.set_as_of(None, False)
 
     def clone(self, *args, **kwargs):
         obj = super(VersionedQuery, self).clone(*args, **kwargs)
-        obj.query_as_of_time = self.query_as_of_time
-        obj.apply_query_as_of_time = self.apply_query_as_of_time
+        try:
+            obj.set_as_of(self.as_of_time, self.apply_as_of_time)
+        except AttributeError:
+            # If the caller is using clone to create a different type of Query, that's OK.
+            # An example of this is when creating or updating an object, this method is called
+            # with a first parameter of sql.UpdateQuery.
+            pass
         return obj
+
+    def set_as_of(self, as_of_time, apply_as_of_time):
+        self.as_of_time = as_of_time
+        self.apply_as_of_time = apply_as_of_time
 
     def get_compiler(self, *args, **kwargs):
         # Wait! One more thing before returning the compiler:
@@ -160,6 +168,13 @@ class VersionedQuery(Query):
         return super(VersionedQuery, self).get_compiler(*args, **kwargs)
 
     def propagate_query_time(self):
+        """
+        This sets as query time, or lack of query time, on all the foreign keys
+        involved in the query.  Only if they are aware of the query time can they
+        create a time-based restriction in the JOIN ON clause.  In the case of
+        left outer joins, it is necessary that the time-based restriction happens
+        in the JOIN ON clause.  For inner joins, it doesn't hurt.
+        """
         first = True
         for alias in self.tables:
             if not self.alias_refcount[alias]:
@@ -171,7 +186,7 @@ class VersionedQuery(Query):
                 # alias_map if they aren't in a join. That's OK. We skip them.
                 continue
             if join_type and not first:
-                join_field.set_as_of(self.query_as_of_time, self.apply_query_as_of_time)
+                join_field.set_as_of(self.as_of_time, self.apply_as_of_time)
             first = False
 
 class VersionedQuerySet(QuerySet):
@@ -271,8 +286,7 @@ class VersionedQuerySet(QuerySet):
         :param qtime: The UTC date and time; if None then use the current state (where version_end_date = NULL)
         :return: A VersionedQuerySet
         """
-        self.query.query_as_of_time = qtime
-        self.query.apply_query_as_of_time = True
+        self.query.set_as_of(qtime, True)
         return self.add_as_of_filter(qtime)
 
     def add_as_of_filter(self, querytime):
