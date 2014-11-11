@@ -323,13 +323,6 @@ class VersionedForeignKey(ForeignKey):
         super(VersionedForeignKey, self).__init__(to, rel_class=VersionedManyToOneRel, **kwargs)
         self.set_as_of(None, False)
 
-    def clone(self):
-        as_of_time = self.as_of_time
-        apply_as_of_time = self.apply_as_of_time
-        clone = super(VersionedForeignKey, self).clone()
-        clone.set_as_of(as_of_time, apply_as_of_time)
-        return clone
-
     def set_as_of(self, as_of_time, apply_as_of_time):
         self.as_of_time = as_of_time
         self.apply_as_of_time = apply_as_of_time
