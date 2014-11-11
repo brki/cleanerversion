@@ -300,6 +300,7 @@ class VersionedQuerySet(QuerySet):
         qs = super(VersionedQuerySet, self).values_list(*fields, **kwargs)
         return qs.add_as_of_filter(qs.query_time)
 
+
 class VersionedManyToOneRel(ManyToOneRel):
     def set_as_of(self, as_of_time, apply_as_of_time):
         self.as_of_time = as_of_time
@@ -308,11 +309,12 @@ class VersionedManyToOneRel(ManyToOneRel):
             self.field.set_as_of(as_of_time, apply_as_of_time)
 
 
-
 class VersionedForeignKey(ForeignKey):
     """
     We need to replace the standard ForeignKey declaration in order to be able to introduce
     the VersionedReverseSingleRelatedObjectDescriptor, which allows to go back in time...
+    We also default to using the VersionedManyToOneRel, which helps us correctly limit results
+    when joining tables via foreign and many-to-many relation fields.
     """
     def __init__(self, to, rel_class=ManyToOneRel, **kwargs):
         super(VersionedForeignKey, self).__init__(to, rel_class=VersionedManyToOneRel, **kwargs)
@@ -321,8 +323,6 @@ class VersionedForeignKey(ForeignKey):
     def set_as_of(self, as_of_time, apply_as_of_time):
         self.as_of_time = as_of_time
         self.apply_as_of_time = apply_as_of_time
-        if hasattr(self, 'field'):
-            self.field.set_as_of(as_of_time, apply_as_of_time)
 
     def contribute_to_class(self, cls, name, virtual_only=False):
         super(VersionedForeignKey, self).contribute_to_class(cls, name, virtual_only)
