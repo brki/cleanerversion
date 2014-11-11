@@ -16,7 +16,7 @@ import datetime
 from time import sleep
 import itertools
 from django.core.exceptions import SuspiciousOperation, ObjectDoesNotExist, MultipleObjectsReturned, ValidationError
-from django.db.models import Q
+from django.db.models import Q, Count, Sum
 from django.db.models.fields import CharField
 from django.test import TestCase, TransactionTestCase
 from django.utils.timezone import utc
@@ -61,7 +61,8 @@ class Student(Versionable):
         return self.name
 
 
-class MultiM2MTest(TestCase):
+#class MultiM2MTest(TestCase):
+class MultiM2MTest(TransactionTestCase):
     """
     Testing multiple ManyToMany-relationships on a same class; the following story was chosen:
 
@@ -158,6 +159,7 @@ class MultiM2MTest(TestCase):
         self.assertEqual(mr_biggs_t0.name, 'Mr. Biggs')
         self.assertEqual(mr_biggs_t0.address, '123 Mainstreet, Somewhere')
         self.assertEqual(len(mr_biggs_t0.students.all()), 2)
+
         for student in mr_biggs_t0.students.all():
             self.assertIn(student.name, ['Annika', 'Benny'])
 
@@ -305,6 +307,23 @@ class MultiM2MTest(TestCase):
         self.assertSetEqual(set([o.pk for o in benny4.professors.all()]), set(some_professor_ids))
         self.assertSetEqual(set(list(benny5.professors.all())), set())
 
+    def test_annotations_and_aggregations(self):
+
+        a = list(Student.objects.current.annotate(num_teachers=Count('professors')).all())
+        # Annotations and aggreagations should work with .current objects as well as historical .as_of() objects.
+        self.assertEqual(4,
+            Professor.objects.current.annotate(num_students=Count('students')).aggregate(sum=Sum('num_students'))['sum']
+        )
+        self.assertTupleEqual((1,1),
+            (Professor.objects.current.annotate(num_students=Count('students')).get(name='Mr. Biggs').num_students,
+             Professor.objects.current.get(name='Mr. Biggs').students.count())
+        )
+
+        self.assertTupleEqual((2,2),
+            (Professor.objects.as_of(self.t1).annotate(num_students=Count('students')).get(name='Mr. Biggs').num_students,
+             Professor.objects.as_of(self.t1).get(name='Mr. Biggs').students.count())
+        )
+
 
 class Pupil(Versionable):
     name = CharField(max_length=200)
@@ -317,7 +336,50 @@ class Teacher(Versionable):
     name = CharField(max_length=200)
     domain = CharField(max_length=200)
 
+from django.db import models
+class Pupil2(models.Model):
+    name = CharField(max_length=200)
+    phone_number = CharField(max_length=200)
+    language_teachers = models.ManyToManyField('Teacher2', related_name='language_students2')
+    science_teachers = models.ManyToManyField('Teacher2', related_name='science_students2')
 
+class Teacher2(models.Model):
+    name = CharField(max_length=200)
+    domain = CharField(max_length=200)
+
+class FooTest(TransactionTestCase):
+    def test_foo(self):
+        T = Teacher
+        P = Pupil
+        PO = P.objects.current
+
+        t1 = T.objects.create(name='one', domain='ho')
+        t2 = T.objects.create(name='two', domain='ho')
+        p1 = P.objects.create(name='pone', phone_number='0')
+        p2 = P.objects.create(name='ptwo', phone_number='0')
+        p3 = P.objects.create(name='pthree', phone_number='0')
+        p1.language_teachers.add(t1, t2)
+        p2.language_teachers.add(t1)
+
+
+        a = list(PO.annotate(teacher_count=Count('language_teachers')).all())
+
+        T = Teacher2
+        P = Pupil2
+        PO = P.objects
+
+        t1 = T.objects.create(name='one', domain='ho')
+        t2 = T.objects.create(name='two', domain='ho')
+        p1 = P.objects.create(name='pone', phone_number='0')
+        p2 = P.objects.create(name='ptwo', phone_number='0')
+        p3 = P.objects.create(name='pthree', phone_number='0')
+        p1.language_teachers.add(t1, t2)
+        p2.language_teachers.add(t1)
+
+
+        b = list(PO.annotate(teacher_count=Count('language_teachers')).all())
+
+        a=1
 class MultiM2MToSameTest(TestCase):
     """
     This test case shall test the correct functionality of the following relationship:

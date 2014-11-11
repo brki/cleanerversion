@@ -157,27 +157,44 @@ class VersionedQuery(Query):
 
     def get_compiler(self, *args, **kwargs):
         # Wait! One more thing before returning the compiler: propagate the query time to all the related table aliases.
-        if self.apply_query_as_of_time:
+        if True or self.apply_query_as_of_time:
             self.propagate_query_time()
         return super(VersionedQuery, self).get_compiler(*args, **kwargs)
 
     def propagate_query_time(self):
-        self_alias = self.model._meta.db_table
-        aliases_used = [k for k,v in self.alias_refcount.iteritems() if v>0 and k != self_alias]
 
-        where_clauses = []
-        params = []
-        for alias in aliases_used:
-            if self.query_as_of_time:
-                where_clauses.append(
-                    '''{alias}.version_start_date <= %s
-                        AND ({alias}.version_end_date > %s OR {alias}.version_end_date is NULL )
-                    '''.format(alias=alias))
-                params += [self.query_as_of_time, self.query_as_of_time]
-            else:
-                # There was no query time set, so look for "current" entries
-                where_clauses.append("{0}.version_end_date is NULL".format(alias))
-        self.add_extra(None, None, where_clauses, params, None, None)
+        first = True
+        for alias in self.tables:
+            if not self.alias_refcount[alias]:
+                continue
+            try:
+                name, alias, join_type, lhs, join_cols, _, join_field = self.alias_map[alias]
+            except KeyError:
+                # Extra tables can end up in self.tables, but not in the
+                # alias_map if they aren't in a join. That's OK. We skip them.
+                continue
+            if join_type and not first:
+                join_field.set_as_of(self.query_as_of_time, self.apply_query_as_of_time)
+            first = False
+
+
+
+        # self_alias = self.model._meta.db_table
+        # aliases_used = [k for k,v in self.alias_refcount.iteritems() if v>0 and k != self_alias]
+        #
+        # where_clauses = []
+        # params = []
+        # for alias in aliases_used:
+        #     if self.query_as_of_time:
+        #         where_clauses.append(
+        #             '''{alias}.version_start_date <= %s
+        #                 AND ({alias}.version_end_date > %s OR {alias}.version_end_date is NULL )
+        #             '''.format(alias=alias))
+        #         params += [self.query_as_of_time, self.query_as_of_time]
+        #     else:
+        #         # There was no query time set, so look for "current" entries
+        #         where_clauses.append("{0}.version_end_date is NULL".format(alias))
+        # self.add_extra(None, None, where_clauses, params, None, None)
 
 class VersionedQuerySet(QuerySet):
     """
@@ -310,12 +327,37 @@ class VersionedQuerySet(QuerySet):
         qs = super(VersionedQuerySet, self).values_list(*fields, **kwargs)
         return qs.add_as_of_filter(qs.query_time)
 
+from django.db.models.fields.related import ManyToOneRel
+class VersionedManyToOneRel(ManyToOneRel):
+    def set_as_of(self, as_of_time, apply_as_of_time):
+        self.as_of_time = as_of_time
+        self.apply_as_of_time = apply_as_of_time
+        if hasattr(self, 'field'):
+            self.field.set_as_of(as_of_time, apply_as_of_time)
+
+
 
 class VersionedForeignKey(ForeignKey):
     """
     We need to replace the standard ForeignKey declaration in order to be able to introduce
     the VersionedReverseSingleRelatedObjectDescriptor, which allows to go back in time...
     """
+    def __init__(self, to, rel_class=ManyToOneRel, **kwargs):
+        super(VersionedForeignKey, self).__init__(to, rel_class=VersionedManyToOneRel, **kwargs)
+        self.set_as_of(None, False)
+
+    def clone(self):
+        as_of_time = self.as_of_time
+        apply_as_of_time = self.apply_as_of_time
+        clone = super(VersionedForeignKey, self).clone()
+        clone.set_as_of(as_of_time, apply_as_of_time)
+        return clone
+
+    def set_as_of(self, as_of_time, apply_as_of_time):
+        self.as_of_time = as_of_time
+        self.apply_as_of_time = apply_as_of_time
+        if hasattr(self, 'field'):
+            self.field.set_as_of(as_of_time, apply_as_of_time)
 
     def contribute_to_class(self, cls, name, virtual_only=False):
         super(VersionedForeignKey, self).contribute_to_class(cls, name, virtual_only)
@@ -332,6 +374,37 @@ class VersionedForeignKey(ForeignKey):
         if hasattr(cls, accessor_name):
             setattr(cls, accessor_name, VersionedForeignRelatedObjectsDescriptor(related))
 
+    def get_extra_restriction(self, where_class, alias, remote_alias):
+        from django.db.models.sql.datastructures import Col
+        from django.db.models.sql.where import ExtraWhere
+        cond = None
+        if self.apply_as_of_time:
+            if self.as_of_time:
+                sql = '''{alias}.version_start_date <= %s
+                         AND ({alias}.version_end_date > %s OR {alias}.version_end_date is NULL )'''.format(alias=remote_alias)
+                params = [self.as_of_time, self.as_of_time]
+            else:
+                sql = '''{alias}.version_end_date is NULL'''.format(alias=remote_alias)
+                params = None
+            cond = ExtraWhere([sql], params)
+        return cond
+#         if True or self.apply_as_of_time:
+#             cond = where_class()
+#             version_end_date = self.model._meta.get_field_by_name('version_end_date')[0]
+#             if self.as_of_time:
+#                 lte = version_end_date.get_lookup('lte')
+#                 lte_lookup = lte(Col(remote_alias, version_end_date, version_end_date), self.as_of_time)
+#                 gt = version_end_date.get_lookup('gt')
+#                 gt_lookup = gt(Col(remote_alias, version_end_date, version_end_date), self.as_of_time)
+#
+#                 cond.add(lte_lookup, 'AND')
+#             else:
+#                 lookup = version_end_date.get_lookup('isnull')(Col(remote_alias, field, field), True)
+#                 cond.add(lookup, 'AND')
+# #                '''{alias}.version_start_date <= %s
+# #                    AND ({alias}.version_end_date > %s OR {alias}.version_end_date is NULL )
+#
+#         return cond
 
 class VersionedManyToManyField(ManyToManyField):
     def __init__(self, *args, **kwargs):
