@@ -14,21 +14,22 @@
 
 import copy
 import datetime
+import uuid
 from django import VERSION
 from django.core.exceptions import SuspiciousOperation, MultipleObjectsReturned, ObjectDoesNotExist
 from django.db.models.base import Model
 from django.db.models import Q
 from django.db.models.fields import FieldDoesNotExist
-from django.db.models.fields.related import ForeignKey, ReverseSingleRelatedObjectDescriptor, \
-    ReverseManyRelatedObjectsDescriptor, ManyToManyField, ManyRelatedObjectsDescriptor, create_many_related_manager, \
-    ForeignRelatedObjectsDescriptor, ManyToOneRel
+from django.db.models.fields.related import (ForeignKey, ReverseSingleRelatedObjectDescriptor,
+    ReverseManyRelatedObjectsDescriptor, ManyToManyField, ManyRelatedObjectsDescriptor, create_many_related_manager,
+    ForeignRelatedObjectsDescriptor, ManyToOneRel)
 from django.db.models.query import QuerySet, ValuesListQuerySet, ValuesQuerySet
 from django.db.models.signals import post_init
 from django.db.models.sql import Query
+from django.db.models.sql.where import ExtraWhere
 from django.utils.functional import cached_property
 from django.utils.timezone import utc
 from django.utils import six
-import uuid
 
 from django.db import models, router
 
@@ -163,6 +164,12 @@ class VersionedQuery(Query):
         return obj
 
     def set_as_of(self, as_of_time, apply_as_of_time):
+        """
+        Set the as_of time that will be used to restrict the query for the valid objects.
+        :param DateTime as_of_time: Datetime or None (None means use the current objects)
+        :param bool apply_as_of_time: If false, then the query will not be restricted by as_of_time
+        :return:
+        """
         self.as_of_time = as_of_time
         self.apply_as_of_time = apply_as_of_time
 
@@ -202,12 +209,14 @@ class VersionedQuerySet(QuerySet):
     for its parent class (QuerySet).
     """
 
-    query_time = None
-
     def __init__(self, model=None, query=None, *args, **kwargs):
+        """
+        Overridden so that a VersionedQuery will be used.
+        """
         if not query:
             query = VersionedQuery(model)
         super(VersionedQuerySet, self).__init__(model=model, query=query, *args, **kwargs)
+        self.query_time = None
 
     def __getitem__(self, k):
         """
@@ -321,7 +330,18 @@ class VersionedQuerySet(QuerySet):
 
 
 class VersionedManyToOneRel(ManyToOneRel):
+    """
+    Overridden to allow keeping track of the query as_of time, so that foreign keys
+    can use that information when creating the sql joins.
+    """
+
     def set_as_of(self, as_of_time, apply_as_of_time):
+        """
+        Set the as_of time that will be used to restrict the query for the valid objects.
+        :param DateTime as_of_time: Datetime or None (None means use the current objects)
+        :param bool apply_as_of_time: If false, then the query will not be restricted by as_of_time
+        :return:
+        """
         self.as_of_time = as_of_time
         self.apply_as_of_time = apply_as_of_time
         if hasattr(self, 'field'):
@@ -340,6 +360,12 @@ class VersionedForeignKey(ForeignKey):
         self.set_as_of(None, False)
 
     def set_as_of(self, as_of_time, apply_as_of_time):
+        """
+        Set the as_of time that will be used to restrict the query for the valid objects.
+        :param DateTime as_of_time: Datetime or None (None means use the current objects)
+        :param bool apply_as_of_time: If false, then the query will not be restricted by as_of_time
+        :return:
+        """
         self.as_of_time = as_of_time
         self.apply_as_of_time = apply_as_of_time
 
@@ -359,7 +385,6 @@ class VersionedForeignKey(ForeignKey):
             setattr(cls, accessor_name, VersionedForeignRelatedObjectsDescriptor(related))
 
     def get_extra_restriction(self, where_class, alias, remote_alias):
-        from django.db.models.sql.where import ExtraWhere
         cond = None
         if self.apply_as_of_time:
             if self.as_of_time:

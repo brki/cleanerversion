@@ -61,8 +61,7 @@ class Student(Versionable):
         return self.name
 
 
-#class MultiM2MTest(TestCase):
-class MultiM2MTest(TransactionTestCase):
+class MultiM2MTest(TestCase):
     """
     Testing multiple ManyToMany-relationships on a same class; the following story was chosen:
 
@@ -309,7 +308,6 @@ class MultiM2MTest(TransactionTestCase):
 
     def test_annotations_and_aggregations(self):
 
-        a = list(Student.objects.current.annotate(num_teachers=Count('professors')).all())
         # Annotations and aggreagations should work with .current objects as well as historical .as_of() objects.
         self.assertEqual(4,
             Professor.objects.current.annotate(num_students=Count('students')).aggregate(sum=Sum('num_students'))['sum']
@@ -324,6 +322,11 @@ class MultiM2MTest(TransactionTestCase):
              Professor.objects.as_of(self.t1).get(name='Mr. Biggs').students.count())
         )
 
+        # Results should include records for which the annotation returns a 0 count, too.
+        # This requires that the generated LEFT OUTER JOIN condition includes a clause
+        # to restrict the records according to the desired as_of time.
+        self.assertEqual(3, len(Student.objects.current.annotate(num_teachers=Count('professors')).all()))
+
 
 class Pupil(Versionable):
     name = CharField(max_length=200)
@@ -336,50 +339,7 @@ class Teacher(Versionable):
     name = CharField(max_length=200)
     domain = CharField(max_length=200)
 
-from django.db import models
-class Pupil2(models.Model):
-    name = CharField(max_length=200)
-    phone_number = CharField(max_length=200)
-    language_teachers = models.ManyToManyField('Teacher2', related_name='language_students2')
-    science_teachers = models.ManyToManyField('Teacher2', related_name='science_students2')
 
-class Teacher2(models.Model):
-    name = CharField(max_length=200)
-    domain = CharField(max_length=200)
-
-class FooTest(TransactionTestCase):
-    def test_foo(self):
-        T = Teacher
-        P = Pupil
-        PO = P.objects.current
-
-        t1 = T.objects.create(name='one', domain='ho')
-        t2 = T.objects.create(name='two', domain='ho')
-        p1 = P.objects.create(name='pone', phone_number='0')
-        p2 = P.objects.create(name='ptwo', phone_number='0')
-        p3 = P.objects.create(name='pthree', phone_number='0')
-        p1.language_teachers.add(t1, t2)
-        p2.language_teachers.add(t1)
-
-
-        a = list(PO.annotate(teacher_count=Count('language_teachers')).all())
-
-        T = Teacher2
-        P = Pupil2
-        PO = P.objects
-
-        t1 = T.objects.create(name='one', domain='ho')
-        t2 = T.objects.create(name='two', domain='ho')
-        p1 = P.objects.create(name='pone', phone_number='0')
-        p2 = P.objects.create(name='ptwo', phone_number='0')
-        p3 = P.objects.create(name='pthree', phone_number='0')
-        p1.language_teachers.add(t1, t2)
-        p2.language_teachers.add(t1)
-
-
-        b = list(PO.annotate(teacher_count=Count('language_teachers')).all())
-
-        a=1
 class MultiM2MToSameTest(TestCase):
     """
     This test case shall test the correct functionality of the following relationship:
