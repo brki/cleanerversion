@@ -114,7 +114,7 @@ class VersionManager(models.Manager):
 
     @property
     def current(self):
-        return self.filter(version_end_date__isnull=True)
+        return self.as_of(None)
 
     def create(self, **kwargs):
         """
