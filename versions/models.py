@@ -17,13 +17,11 @@ import datetime
 from django import VERSION
 from django.core.exceptions import SuspiciousOperation, MultipleObjectsReturned, ObjectDoesNotExist
 from django.db.models.base import Model
-from django.db.models.constants import LOOKUP_SEP
-
 from django.db.models import Q
 from django.db.models.fields import FieldDoesNotExist
 from django.db.models.fields.related import ForeignKey, ReverseSingleRelatedObjectDescriptor, \
     ReverseManyRelatedObjectsDescriptor, ManyToManyField, ManyRelatedObjectsDescriptor, create_many_related_manager, \
-    ForeignRelatedObjectsDescriptor
+    ForeignRelatedObjectsDescriptor, ManyToOneRel
 from django.db.models.query import QuerySet, ValuesListQuerySet, ValuesQuerySet
 from django.db.models.signals import post_init
 from django.db.models.sql import Query
@@ -156,13 +154,12 @@ class VersionedQuery(Query):
         return obj
 
     def get_compiler(self, *args, **kwargs):
-        # Wait! One more thing before returning the compiler: propagate the query time to all the related table aliases.
-        if True or self.apply_query_as_of_time:
-            self.propagate_query_time()
+        # Wait! One more thing before returning the compiler:
+        # propagate the query time to all the related foreign key fields.
+        self.propagate_query_time()
         return super(VersionedQuery, self).get_compiler(*args, **kwargs)
 
     def propagate_query_time(self):
-
         first = True
         for alias in self.tables:
             if not self.alias_refcount[alias]:
@@ -176,25 +173,6 @@ class VersionedQuery(Query):
             if join_type and not first:
                 join_field.set_as_of(self.query_as_of_time, self.apply_query_as_of_time)
             first = False
-
-
-
-        # self_alias = self.model._meta.db_table
-        # aliases_used = [k for k,v in self.alias_refcount.iteritems() if v>0 and k != self_alias]
-        #
-        # where_clauses = []
-        # params = []
-        # for alias in aliases_used:
-        #     if self.query_as_of_time:
-        #         where_clauses.append(
-        #             '''{alias}.version_start_date <= %s
-        #                 AND ({alias}.version_end_date > %s OR {alias}.version_end_date is NULL )
-        #             '''.format(alias=alias))
-        #         params += [self.query_as_of_time, self.query_as_of_time]
-        #     else:
-        #         # There was no query time set, so look for "current" entries
-        #         where_clauses.append("{0}.version_end_date is NULL".format(alias))
-        # self.add_extra(None, None, where_clauses, params, None, None)
 
 class VersionedQuerySet(QuerySet):
     """
@@ -327,7 +305,6 @@ class VersionedQuerySet(QuerySet):
         qs = super(VersionedQuerySet, self).values_list(*fields, **kwargs)
         return qs.add_as_of_filter(qs.query_time)
 
-from django.db.models.fields.related import ManyToOneRel
 class VersionedManyToOneRel(ManyToOneRel):
     def set_as_of(self, as_of_time, apply_as_of_time):
         self.as_of_time = as_of_time
@@ -375,7 +352,6 @@ class VersionedForeignKey(ForeignKey):
             setattr(cls, accessor_name, VersionedForeignRelatedObjectsDescriptor(related))
 
     def get_extra_restriction(self, where_class, alias, remote_alias):
-        from django.db.models.sql.datastructures import Col
         from django.db.models.sql.where import ExtraWhere
         cond = None
         if self.apply_as_of_time:
@@ -388,23 +364,6 @@ class VersionedForeignKey(ForeignKey):
                 params = None
             cond = ExtraWhere([sql], params)
         return cond
-#         if True or self.apply_as_of_time:
-#             cond = where_class()
-#             version_end_date = self.model._meta.get_field_by_name('version_end_date')[0]
-#             if self.as_of_time:
-#                 lte = version_end_date.get_lookup('lte')
-#                 lte_lookup = lte(Col(remote_alias, version_end_date, version_end_date), self.as_of_time)
-#                 gt = version_end_date.get_lookup('gt')
-#                 gt_lookup = gt(Col(remote_alias, version_end_date, version_end_date), self.as_of_time)
-#
-#                 cond.add(lte_lookup, 'AND')
-#             else:
-#                 lookup = version_end_date.get_lookup('isnull')(Col(remote_alias, field, field), True)
-#                 cond.add(lookup, 'AND')
-# #                '''{alias}.version_start_date <= %s
-# #                    AND ({alias}.version_end_date > %s OR {alias}.version_end_date is NULL )
-#
-#         return cond
 
 class VersionedManyToManyField(ManyToManyField):
     def __init__(self, *args, **kwargs):
