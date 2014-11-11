@@ -185,13 +185,9 @@ class VersionedQuerySet(QuerySet):
     query_time = None
 
     def __init__(self, model=None, query=None, *args, **kwargs):
-
         if not query:
             query = VersionedQuery(model)
         super(VersionedQuerySet, self).__init__(model=model, query=query, *args, **kwargs)
-
-        self.related_table_in_filter = set()
-        """We will store in it all the tables we have being using in while filtering."""
 
     def __getitem__(self, k):
         """
@@ -245,7 +241,6 @@ class VersionedQuerySet(QuerySet):
 
         clone = super(VersionedQuerySet, self)._clone(**kwargs)
         clone.query_time = self.query_time
-        clone.related_table_in_filter = self.related_table_in_filter
 
         return clone
 
