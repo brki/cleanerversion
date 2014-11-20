@@ -391,12 +391,15 @@ class VersionedQuerySet(QuerySet):
         :param querytime: UTC datetime object, or None.
         :return: VersionedQuerySet
         """
+        #TODO: keep track of whether a querytime has already been added, and remove it if it has.
+        #     OR: keep track of the filters that should be added, and add them later (_filter... method)
         if querytime:
             self.query_time = querytime
             filter = (Q(version_end_date__gt=querytime) | Q(version_end_date__isnull=True)) \
                      & Q(version_start_date__lte=querytime)
         else:
             filter = Q(version_end_date__isnull=True)
+        #FIXME: adding a filter here when there is not change in the query time is removing the _result_cache:
         return self.filter(filter)
 
     def values_list(self, *fields, **kwargs):
@@ -547,6 +550,9 @@ class VersionedReverseSingleRelatedObjectDescriptor(ReverseSingleRelatedObjectDe
         """
         current_elt = super(VersionedReverseSingleRelatedObjectDescriptor, self).__get__(instance, instance_type)
 
+        if instance is None:
+            return self
+
         if not current_elt:
             return None
 
@@ -585,6 +591,13 @@ class VersionedForeignRelatedObjectsDescriptor(ForeignRelatedObjectsDescriptor):
                 if self.instance.as_of is not None:
                     queryset = queryset.as_of(self.instance.as_of)
                 return queryset
+
+            def get_prefetch_queryset(self, instances, queryset=None):
+                if queryset is None:
+                    queryset = self.get_queryset()
+                rel_qs, rel_obj_attr, instance_attr, single, cache_name = (
+                    super(VersionedRelatedManager, self).get_prefetch_queryset(instances, queryset))
+                return rel_qs, rel_obj_attr, instance_attr, single, cache_name
 
             def add(self, *objs):
                 cloned_objs = ()

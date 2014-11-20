@@ -1602,3 +1602,15 @@ class PrefetchingTests(TestCase):
             )
         """.format(player_table=player_table, team_table=team_table, ts=t1_utc_w_tz, ts_wo_tz=t1_utc_wo_tz)
         self.assertStringEqualIgnoreWhiteSpaces(expected_query, select_related_query)
+
+    def test_prefetch_related(self):
+       with self.assertNumQueries(3):
+           team = Team.objects.as_of(self.t1).prefetch_related('player_set', 'city').first()
+           self.assertIsNotNone(team)
+           #TODO: _result_cache is not correctly set, although queries were run to fetch the objects:
+           p1 = team.player_set.all()[0]
+           p2 = team.player_set.all()[1]
+           #TODO: prefetch_related is not restricting on the query time for city, and this is running a new query:
+           city = team.city
+
+           # The comment around line 184 (def all()) in db.models.manager.py is interesting and relevant
