@@ -896,6 +896,13 @@ class MultiM2MTest(TestCase):
         self.assertEqual(len(classrooms), 2)
 
         annika_t0 = Student.objects.as_of(self.t0).get(name='Annika')
+
+
+        ap = annika_t0.professors
+        ap.all()
+
+
+
         annikas_professors_t0 = annika_t0.professors.all()
         annikas_classrooms_t0 = annika_t0.classrooms.all()
         self.assertEqual(len(annikas_professors_t0), 2)
@@ -974,6 +981,11 @@ class MultiM2MTest(TestCase):
         # In the setUp, Benny had a professor, and then no more.
         all_professors = list(Professor.objects.current.all())
         benny = Student.objects.current.get(name='Benny')
+
+
+        bp = benny.professors
+        bp.add(*all_professors)
+
         benny.professors.add(*all_professors)
         benny.as_of = get_utc_now()
         # This was once failing because _add_items() was filtering out items it didn't need to re-add,

@@ -15,7 +15,6 @@
 import copy
 import datetime
 import uuid
-from collections import namedtuple
 from django import VERSION
 
 if VERSION[:2] >= (1, 7):
@@ -38,10 +37,22 @@ from django.utils import six
 
 from django.db import models, router
 
-
 def get_utc_now():
     return datetime.datetime.utcnow().replace(tzinfo=utc)
 
+class QueryTime(object):
+    def __init__(self, time=None, active=False):
+        self.time = time
+        self.active = active
+
+    def clone(self):
+        return QueryTime(self.time, self.active)
+
+    def __str__(self):
+        return '{}, time: {}'.format(
+            'active' if self.active else 'inactive',
+            self.time or 'None'
+        )
 
 class VersionManager(models.Manager):
     """
@@ -50,7 +61,10 @@ class VersionManager(models.Manager):
     use_for_related_fields = True
 
     def get_queryset(self):
-        return VersionedQuerySet(self.model, using=self._db)
+        qs = VersionedQuerySet(self.model, using=self._db)
+        return qs
+
+        #return VersionedQuerySet(self.model, using=self._db)
 
     def as_of(self, time=None):
         """
@@ -95,13 +109,13 @@ class VersionManager(models.Manager):
                     Q(version_end_date=object.version_start_date))
             except MultipleObjectsReturned as e:
                 raise MultipleObjectsReturned(
-                    "pervious_version couldn't uniquely identify the previous version of object " + str(
+                    "previous_version couldn't uniquely identify the previous version of object " + str(
                         object.identity) + " to be returned\n" + str(e))
             # This should never-ever happen, since going prior a first version of an object should be avoided by the
             # first test of this method
             except ObjectDoesNotExist as e:
                 raise ObjectDoesNotExist(
-                    "pervious_version couldn't find a previous version of object " + str(object.identity) + "\n" + str(
+                    "previous_version couldn't find a previous version of object " + str(object.identity) + "\n" + str(
                         e))
             return previous
 
@@ -163,8 +177,8 @@ class VersionedWhereNode(WhereNode):
                 except AttributeError:
                     # Django 1.6 handles compilers as instancemethods
                     _query = qn.__self__.query
-                query_time = _query.as_of_time
-                apply_query_time = _query.apply_as_of_time
+                query_time = _query.querytime.time
+                apply_query_time = _query.querytime.active
                 # Use the join_map to know, what *table* gets joined to which
                 # *left-hand sided* table
                 for lhs, table, join_cols in _query.join_map:
@@ -255,12 +269,12 @@ class VersionedQuery(Query):
     def __init__(self, *args, **kwargs):
         kwargs['where'] = VersionedWhereNode
         super(VersionedQuery, self).__init__(*args, **kwargs)
-        self.set_as_of(None, False)
+        self.querytime = QueryTime()
 
     def clone(self, *args, **kwargs):
         _clone = super(VersionedQuery, self).clone(*args, **kwargs)
         try:
-            _clone.set_as_of(self.as_of_time, self.apply_as_of_time)
+            _clone.querytime = self.querytime.clone()
         except AttributeError:
             # If the caller is using clone to create a different type of Query, that's OK.
             # An example of this is when creating or updating an object, this method is called
@@ -268,16 +282,22 @@ class VersionedQuery(Query):
             pass
         return _clone
 
-    def set_as_of(self, as_of_time, apply_as_of_time):
+    def get_compiler(self, *args, **kwargs):
         """
-        Set the as_of time that will be used to restrict the query for the valid objects.
-        :param DateTime as_of_time: Datetime or None (None means use the current objects)
-        :param bool apply_as_of_time: If false, then the query will not be restricted by as_of_time
-        :return:
+        Add the query time restriction limit at the last moment.  Applying it earlier
+        (e.g. by adding a filter to the queryset) does not allow the caching of related
+        object to work (they are attached to a queryset; filter() returns a new queryset).
         """
-        self.as_of_time = as_of_time
-        self.apply_as_of_time = apply_as_of_time
-
+        if self.querytime.active:
+            time = self.querytime.time
+            if time is None:
+                self.add_q(Q(version_end_date__isnull=True))
+            else:
+                self.add_q(
+                    (Q(version_end_date__gt=time) | Q(version_end_date__isnull=True)) \
+                    & Q(version_start_date__lte=time)
+                )
+        return super(VersionedQuery, self).get_compiler(*args, **kwargs)
 
 class VersionedQuerySet(QuerySet):
     """
@@ -294,7 +314,9 @@ class VersionedQuerySet(QuerySet):
         if not query:
             query = VersionedQuery(model)
         super(VersionedQuerySet, self).__init__(model=model, query=query, *args, **kwargs)
-        self.query_time = None
+        #self.querytime = QueryTime(active=True)
+        self.querytime = QueryTime()
+        self.query.querytime = self.querytime  #TODO: if above line is correct, no need for this line.
 
     def __getitem__(self, k):
         """
@@ -347,7 +369,8 @@ class VersionedQuerySet(QuerySet):
                 kwargs['klass'] = klass
 
         clone = super(VersionedQuerySet, self)._clone(**kwargs)
-        clone.query_time = self.query_time
+        clone.querytime = self.querytime.clone()
+        clone.query.querytime = clone.querytime
 
         return clone
 
@@ -359,9 +382,10 @@ class VersionedQuerySet(QuerySet):
         :return: Returns the item itself with the time set
         """
         if isinstance(item, Versionable):
-            item.as_of = self.query_time
+            item.as_of = self.querytime.time
         elif isinstance(item, VersionedQuerySet):
-            item.query_time = self.query_time
+            item.querytime = self.querytime
+            item.query.querytime = item.querytime
         elif isinstance(self, ValuesQuerySet):
             # When we are dealing with a ValueQuerySet there is no point in
             # setting the query_time as we are returning an array of values
@@ -378,36 +402,39 @@ class VersionedQuerySet(QuerySet):
         :param qtime: The UTC date and time; if None then use the current state (where version_end_date = NULL)
         :return: A VersionedQuerySet
         """
-        self.query.set_as_of(qtime, True)
-        return self.add_as_of_filter(qtime)
+        clone = self._clone()
+        clone.querytime = QueryTime(qtime, True)
+        clone.query.querytime = clone.querytime
+        return clone
 
-    def add_as_of_filter(self, querytime):
-        """
-        Add a version time restriction filter to the given queryset.
-
-        If querytime = None, then the filter will simply restrict to the current objects (those
-        with version_end_date = NULL).
-
-        :param querytime: UTC datetime object, or None.
-        :return: VersionedQuerySet
-        """
-        #TODO: keep track of whether a querytime has already been added, and remove it if it has.
-        #     OR: keep track of the filters that should be added, and add them later (_filter... method)
-        if querytime:
-            self.query_time = querytime
-            filter = (Q(version_end_date__gt=querytime) | Q(version_end_date__isnull=True)) \
-                     & Q(version_start_date__lte=querytime)
-        else:
-            filter = Q(version_end_date__isnull=True)
-        #FIXME: adding a filter here when there is not change in the query time is removing the _result_cache:
-        return self.filter(filter)
+    # def add_as_of_filter(self, querytime):
+    #     """
+    #     Add a version time restriction filter to the given queryset.
+    #
+    #     If querytime = None, then the filter will simply restrict to the current objects (those
+    #     with version_end_date = NULL).
+    #
+    #     :param querytime: UTC datetime object, or None.
+    #     :return: VersionedQuerySet
+    #     """
+    #     #TODO: keep track of whether a querytime has already been added, and remove it if it has.
+    #     #     OR: keep track of the filters that should be added, and add them later (_filter... method)
+    #     if querytime:
+    #         self.query_time = querytime
+    #         filter = (Q(version_end_date__gt=querytime) | Q(version_end_date__isnull=True)) \
+    #                  & Q(version_start_date__lte=querytime)
+    #     else:
+    #         filter = Q(version_end_date__isnull=True)
+    #     #FIXME: adding a filter here when there is not change in the query time is removing the _result_cache:
+    #     return self.filter(filter)
 
     def values_list(self, *fields, **kwargs):
         """
         Overridden so that an as_of filter will be added to the queryset returned by the parent method.
         """
         qs = super(VersionedQuerySet, self).values_list(*fields, **kwargs)
-        return qs.add_as_of_filter(qs.query_time)
+        return qs
+        #TODO: maybe this method is no longer necessary
 
 
 class VersionedForeignKey(ForeignKey):
@@ -559,6 +586,7 @@ class VersionedReverseSingleRelatedObjectDescriptor(ReverseSingleRelatedObjectDe
         if not isinstance(current_elt, Versionable):
             raise TypeError("It seems like " + str(type(self)) + " is not a Versionable")
 
+        # If current_elt is valid at instance's as_of time there's no need to make a database query.
         if Versionable.matches_as_of(current_elt, instance.as_of):
             current_elt.as_of = instance.as_of
             return current_elt
@@ -588,8 +616,12 @@ class VersionedForeignRelatedObjectsDescriptor(ForeignRelatedObjectsDescriptor):
 
             def get_queryset(self):
                 queryset = super(VersionedRelatedManager, self).get_queryset()
-                if self.instance.as_of is not None:
+                # Do not set the query time if it is already correctly set.  as_of returns a clone
+                # of the queryset, and this will destroy the prefetched objects cache if it exists.
+                if self.instance._querytime.active and queryset.querytime.time != self.instance.as_of:
                     queryset = queryset.as_of(self.instance.as_of)
+                # if self.instance.as_of is not None:
+                #     queryset = queryset.as_of(self.instance.as_of)
                 return queryset
 
             def get_prefetch_queryset(self, instances, queryset=None):
@@ -659,7 +691,10 @@ def create_versioned_many_related_manager(superclass, rel):
             """
 
             queryset = super(VersionedManyRelatedManager, self).get_queryset()
-            return queryset.as_of(self.instance.as_of)
+            if self.instance._querytime.active:
+                queryset = queryset.as_of(self.instance.as_of)
+            #return queryset.as_of(self.instance.as_of)
+            return queryset
 
         def _remove_items(self, source_field_name, target_field_name, *objs):
             """
@@ -702,7 +737,20 @@ def create_versioned_many_related_manager(superclass, rel):
                 if not self.instance.is_current:
                     raise SuspiciousOperation(
                         "Adding many-to-many related objects is only possible on the current version")
+
+                # The ManyRelatedManager.add() method uses the through model's default manager to get
+                # a queryset when looking at which objects already exist in the database.
+                # In order to restrict the query to the current versions when that is done,
+                # we temporarily replace the queryset's using method so that the version validity
+                # condition can be specified.
+                klass = self.through._default_manager.get_queryset().__class__
+                __using_backup = klass.using
+                def using_replacement(self, *args, **kwargs):
+                    qs = __using_backup(self, *args, **kwargs)
+                    return qs.as_of(None)
+                klass.using = using_replacement
                 super(VersionedManyRelatedManager, self).add(*objs)
+                klass.using = __using_backup
 
             def add_at(self, timestamp, *objs):
                 """
@@ -899,9 +947,22 @@ class Versionable(models.Model):
     """Hold the timestamp at which the object's data was looked up. Its value must always be in between the
     version_start_date and the version_end_date"""
 
+    @property
+    def as_of(self):
+        return self._querytime.time
+
+    @as_of.setter
+    def as_of(self, time):
+        self._querytime.active = True
+        self._querytime.time = time
+
     class Meta:
         abstract = True
         unique_together = ('id', 'identity')
+
+    def __init__(self, *args, **kwargs):
+        super(Versionable, self).__init__(*args, **kwargs)
+        self._querytime = QueryTime()
 
     def delete(self, using=None):
         self._delete_at(get_utc_now(), using)
