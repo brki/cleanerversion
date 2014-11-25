@@ -54,6 +54,13 @@ class QueryTime(object):
             self.time or 'None'
         )
 
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+
 class VersionManager(models.Manager):
     """
     This is the Manager-class for any class that inherits from Versionable
@@ -407,7 +414,8 @@ class VersionedQuerySet(QuerySet):
         :return: Returns the item itself with the time set
         """
         if isinstance(item, Versionable):
-            item.as_of = self.querytime.time
+#           item.as_of = self.querytime.time
+            item._querytime = self.querytime.clone()
         elif isinstance(item, VersionedQuerySet):
             item.querytime = self.querytime
             item.query.querytime = item.querytime
@@ -643,7 +651,9 @@ class VersionedForeignRelatedObjectsDescriptor(ForeignRelatedObjectsDescriptor):
                 queryset = super(VersionedRelatedManager, self).get_queryset()
                 # Do not set the query time if it is already correctly set.  as_of returns a clone
                 # of the queryset, and this will destroy the prefetched objects cache if it exists.
-                if self.instance._querytime.active and queryset.querytime.time != self.instance.as_of:
+
+                #if self.instance._querytime.active and queryset.querytime.time != self.instance.as_of:
+                if self.instance._querytime.active and queryset.querytime != self.instance._querytime:
                     queryset = queryset.as_of(self.instance.as_of)
                 # if self.instance.as_of is not None:
                 #     queryset = queryset.as_of(self.instance.as_of)

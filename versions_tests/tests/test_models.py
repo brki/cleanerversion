@@ -1616,13 +1616,30 @@ class PrefetchingTests(TestCase):
         self.assertStringEqualIgnoreWhiteSpaces(expected_query, select_related_query)
 
     def test_prefetch_related(self):
-       with self.assertNumQueries(3):
-           team = Team.objects.as_of(self.t1).prefetch_related('player_set', 'city').first()
-           self.assertIsNotNone(team)
-           #TODO: _result_cache is not correctly set, although queries were run to fetch the objects:
-           p1 = team.player_set.all()[0]
-           p2 = team.player_set.all()[1]
-           #TODO: prefetch_related is not restricting on the query time for city, and this is running a new query:
-           city = team.city
+        with self.assertNumQueries(3):
+            team = Team.objects.as_of(self.t1).prefetch_related('player_set', 'city').first()
+            self.assertIsNotNone(team)
+            p1 = team.player_set.all()[0]
+            p2 = team.player_set.all()[1]
+            self.assertEqual(self.city1, team.city)
 
-           # The comment around line 184 (def all()) in db.models.manager.py is interesting and relevant
+        p3 = Player.objects.create(name='pl3.v1', team=self.team1)
+        p2 = self.p2.clone()
+        p2.name = 'pl2.v2'
+        p2.save()
+        p1.delete()
+
+        with self.assertNumQueries(3):
+            team = Team.objects.current.prefetch_related('player_set', 'city').first()
+            self.assertIsNotNone(team)
+            self.assertEqual(2, len(team.player_set.all()))
+            p1 = team.player_set.all()[0]
+            p2 = team.player_set.all()[1]
+            self.assertEqual(self.city1, team.city)
+
+        with self.assertNumQueries(3):
+            team = Team.objects.prefetch_related('player_set', 'city').first()
+            self.assertIsNotNone(team)
+            self.assertEqual(4, len(team.player_set.all()))
+            px = team.player_set.all()[1]
+            self.assertEqual(self.city1, team.city)
