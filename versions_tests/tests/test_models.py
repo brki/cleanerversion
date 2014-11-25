@@ -803,12 +803,12 @@ class OneToManyFilteringTest(TestCase):
                     ))
                 )
             WHERE (
-                (
+                "{player_table}"."name" LIKE p1% ESCAPE '\\\'
+                AND (
                     "{team_table}"."version_end_date" > {ts_wo_tz}
                     OR "{team_table}"."version_end_date" IS NULL
-                )
+                    )
                 AND "{team_table}"."version_start_date" <= {ts_wo_tz}
-                AND "{player_table}"."name" LIKE p1% ESCAPE '\\\'
             )
         """.format(ts=t5_utc_w_tz, ts_wo_tz=t5_utc_wo_tz, team_table=team_table, player_table=player_table)
         self.assertStringEqualIgnoreWhiteSpaces(expected_query, team_none_query)
@@ -1295,10 +1295,10 @@ class ManyToManyFilteringTest(TestCase):
                    ))
                )
          WHERE (
-               ("versions_tests_c1"."version_end_date" > {time_no_tz}
+               "versions_tests_c2"."name" LIKE c2% escape '\\'
+           AND ("versions_tests_c1"."version_end_date" > {time_no_tz}
                    OR "versions_tests_c1"."version_end_date" IS NULL)
            AND "versions_tests_c1"."version_start_date" <= {time_no_tz}
-           AND "versions_tests_c2"."name" LIKE c2% escape '\\'
                )
         """.format(time=t1_string, time_no_tz=t1_no_tz_string)
 
@@ -1394,10 +1394,10 @@ class ManyToManyFilteringTest(TestCase):
                    )
                 )
          WHERE (
-               ("versions_tests_c1"."version_end_date" > {time_no_tz}
+               "versions_tests_c3"."name" LIKE c3%  escape '\\'
+           AND ("versions_tests_c1"."version_end_date" > {time_no_tz}
                  OR "versions_tests_c1"."version_end_date" IS NULL)
            AND "versions_tests_c1"."version_start_date" <= {time_no_tz}
-           AND "versions_tests_c3"."name" LIKE c3%  escape '\\'
                )
         """.format(time=t1_string, time_no_tz=t1_no_tz_string)
         self.assertStringEqualIgnoreWhiteSpaces(expected_query, should_be_c1_query)
