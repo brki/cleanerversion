@@ -38,6 +38,7 @@ from django.utils import six
 
 from django.db import models, router
 
+
 def get_utc_now():
     return datetime.datetime.utcnow().replace(tzinfo=utc)
 
@@ -141,7 +142,7 @@ class VersionManager(models.Manager):
         :param object: Versionable
         :return: Versionable
         """
-        if object.version_end_date == None:
+        if object.version_end_date is None:
             return object
 
         return self.current.filter(identity=object.identity).first()
@@ -228,6 +229,7 @@ class VersionedExtraWhere(ExtraWhere):
         self.related_alias = remote_alias
         self._as_of_time_set = False
         self.as_of_time = None
+        self._joined_alias = None
 
     def set_as_of(self, as_of_time):
         self.as_of_time = as_of_time
@@ -310,10 +312,11 @@ class VersionedQuery(Query):
                 self.add_q(Q(version_end_date__isnull=True))
             else:
                 self.add_q(
-                    (Q(version_end_date__gt=time) | Q(version_end_date__isnull=True)) \
+                    (Q(version_end_date__gt=time) | Q(version_end_date__isnull=True))
                     & Q(version_start_date__lte=time)
                 )
         return super(VersionedQuery, self).get_compiler(*args, **kwargs)
+
 
 class VersionedQuerySet(QuerySet):
     """
@@ -670,7 +673,7 @@ def create_versioned_many_related_manager(superclass, rel):
             try:
                 version_start_date_field = self.through._meta.get_field('version_start_date')
                 version_end_date_field = self.through._meta.get_field('version_end_date')
-            except (FieldDoesNotExist) as e:
+            except FieldDoesNotExist as e:
                 print(str(e) + "; available fields are " + ", ".join(self.through._meta.get_all_field_names()))
                 raise e
                 # FIXME: this probably does not work when auto-referencing
@@ -738,6 +741,7 @@ def create_versioned_many_related_manager(superclass, rel):
                 # condition can be specified.
                 klass = self.through._default_manager.get_queryset().__class__
                 __using_backup = klass.using
+
                 def using_replacement(self, *args, **kwargs):
                     qs = __using_backup(self, *args, **kwargs)
                     return qs.as_of(None)
@@ -825,9 +829,8 @@ class VersionedReverseManyRelatedObjectsDescriptor(ReverseManyRelatedObjectsDesc
 
         if not self.field.rel.through._meta.auto_created:
             opts = self.field.rel.through._meta
-            raise AttributeError(
-                "Cannot set values on a ManyToManyField which specifies an intermediary model.  Use %s.%s's Manager instead." % (
-                    opts.app_label, opts.object_name))
+            raise AttributeError(("Cannot set values on a ManyToManyField which specifies an intermediary model. "
+                                  "Use %s.%s's Manager instead.") % (opts.app_label, opts.object_name))
 
         manager = self.__get__(instance)
         # Below comment is from parent __set__ method.  We'll force evaluation, too:
@@ -1090,8 +1093,8 @@ class Versionable(models.Model):
         if not as_of_time:
             return instance.version_end_date is None
 
-        return instance.version_start_date <= as_of_time \
-               and (instance.version_end_date is None or instance.version_end_date > as_of_time)
+        return (instance.version_start_date <= as_of_time
+                and (instance.version_end_date is None or instance.version_end_date > as_of_time))
 
 
 class VersionedManyToManyModel(object):
