@@ -338,6 +338,11 @@ class VersionedQuerySet(QuerySet):
 
     @querytime.setter
     def querytime(self, value):
+        """
+        Sets self._querytime as well as self.query.querytime.
+        :param value: None or datetime
+        :return:
+        """
         self._querytime = value
         self.query.querytime = value
 
@@ -350,9 +355,9 @@ class VersionedQuerySet(QuerySet):
         item = super(VersionedQuerySet, self).__getitem__(k)
         if isinstance(item, (list,)):
             for i in item:
-                self._set_query_time(i)
+                self._propagate_querytime_to_item(i)
         else:
-            self._set_query_time(item)
+            self._propagate_querytime_to_item(item)
         return item
 
     def _fetch_all(self):
@@ -364,7 +369,7 @@ class VersionedQuerySet(QuerySet):
             self._result_cache = list(self.iterator())
             if not isinstance(self, ValuesListQuerySet):
                 for x in self._result_cache:
-                    self._set_query_time(x)
+                    self._propagate_querytime_to_item(x)
         if self._prefetch_related_lookups and not self._prefetch_done:
             self._prefetch_related_objects()
 
@@ -392,10 +397,10 @@ class VersionedQuerySet(QuerySet):
                 kwargs['klass'] = klass
 
         clone = super(VersionedQuerySet, self)._clone(**kwargs)
-        self._set_query_time(clone, False)
+        clone.querytime = self.querytime
         return clone
 
-    def _set_query_time(self, item, type_check=True):
+    def _propagate_querytime_to_item(self, item, type_check=True):
         """
         Sets the time for which the query was made on the resulting item
         :param item: an item of type Versionable
@@ -425,14 +430,6 @@ class VersionedQuerySet(QuerySet):
         clone = self._clone()
         clone.querytime = QueryTime(time=qtime, active=True)
         return clone
-
-    def values_list(self, *fields, **kwargs):
-        """
-        Overridden so that an as_of filter will be added to the queryset returned by the parent method.
-        """
-        qs = super(VersionedQuerySet, self).values_list(*fields, **kwargs)
-        return qs
-        #TODO: maybe this method is no longer necessary
 
 
 class VersionedForeignKey(ForeignKey):
@@ -943,6 +940,10 @@ class Versionable(models.Model):
     """Hold the timestamp at which the object's data was looked up. Its value must always be in between the
     version_start_date and the version_end_date"""
 
+    class Meta:
+        abstract = True
+        unique_together = ('id', 'identity')
+
     @property
     def as_of(self):
         return self._querytime.time
@@ -951,12 +952,9 @@ class Versionable(models.Model):
     def as_of(self, time):
         self._querytime = QueryTime(time=time, active=True)
 
-    class Meta:
-        abstract = True
-        unique_together = ('id', 'identity')
-
     def __init__(self, *args, **kwargs):
         super(Versionable, self).__init__(*args, **kwargs)
+        # _querytime is for library-internal use.  Use as_of to set the desired time, if necessary.
         self._querytime = QueryTime(time=None, active=False)
 
     def delete(self, using=None):
