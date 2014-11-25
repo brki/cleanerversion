@@ -584,12 +584,12 @@ class VersionedReverseSingleRelatedObjectDescriptor(ReverseSingleRelatedObjectDe
         if not isinstance(current_elt, Versionable):
             raise TypeError("It seems like " + str(type(self)) + " is not a Versionable")
 
-        # If current_elt is valid at instance's as_of time there's no need to make a database query.
-        if Versionable.matches_as_of(current_elt, instance.as_of):
-            current_elt.as_of = instance.as_of
+        # If current_elt matches the instance's querytime, there's no need to make a database query.
+        if Versionable.matches_querytime(current_elt, instance._querytime):
+            current_elt._querytime = instance._querytime
             return current_elt
 
-        return current_elt.__class__.objects.as_of(instance.as_of).get(identity=current_elt.identity)
+        return current_elt.__class__.objects.as_of(instance._querytime.time).get(identity=current_elt.identity)
 
 
 class VersionedForeignRelatedObjectsDescriptor(ForeignRelatedObjectsDescriptor):
@@ -614,7 +614,7 @@ class VersionedForeignRelatedObjectsDescriptor(ForeignRelatedObjectsDescriptor):
 
             def get_queryset(self):
                 queryset = super(VersionedRelatedManager, self).get_queryset()
-                # Do not set the query time if it is already correctly set.  queryset.as_of returns a clone
+                # Do not set the query time if it is already correctly set.  queryset.as_of() returns a clone
                 # of the queryset, and this will destroy the prefetched objects cache if it exists.
                 if self.instance._querytime.active and queryset.querytime != self.instance._querytime:
                     queryset = queryset.as_of(self.instance._querytime.time)
@@ -688,8 +688,7 @@ def create_versioned_many_related_manager(superclass, rel):
 
             queryset = super(VersionedManyRelatedManager, self).get_queryset()
             if self.instance._querytime.active:
-                queryset = queryset.as_of(self.instance.as_of)
-            #return queryset.as_of(self.instance.as_of)
+                queryset = queryset.as_of(self.instance._querytime.time)
             return queryset
 
         def _remove_items(self, source_field_name, target_field_name, *objs):
@@ -957,7 +956,7 @@ class Versionable(models.Model):
 
     def __init__(self, *args, **kwargs):
         super(Versionable, self).__init__(*args, **kwargs)
-        # _querytime is for library-internal use.  Use as_of to set the desired time, if necessary.
+        # _querytime is for library-internal use.  Use as_of to to read or set the query time.
         self._querytime = QueryTime(time=None, active=False)
 
     def delete(self, using=None):
@@ -1083,19 +1082,21 @@ class Versionable(models.Model):
             rel.save()
 
     @staticmethod
-    def matches_as_of(instance, as_of_time):
+    def matches_querytime(instance, querytime):
         """
-        Checks whether the given instance satisfies the given as_of_time
+        Checks whether the given instance satisfies the given QueryTime object.
 
         :param instance: an instance of Versionable
-        :param as_of_time: datetime value to check against, or None.
+        :param querytime: QueryTime value to check against
         """
-        if not as_of_time:
+        if not querytime.active:
+            return True
+
+        if not querytime.time:
             return instance.version_end_date is None
 
-        return (instance.version_start_date <= as_of_time
-                and (instance.version_end_date is None or instance.version_end_date > as_of_time))
-
+        return (instance.version_start_date <= querytime.time
+                and (instance.version_end_date is None or instance.version_end_date > querytime.time))
 
 class VersionedManyToManyModel(object):
     """
