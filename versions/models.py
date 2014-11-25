@@ -346,9 +346,19 @@ class VersionedQuerySet(QuerySet):
         if not query:
             query = VersionedQuery(model)
         super(VersionedQuerySet, self).__init__(model=model, query=query, *args, **kwargs)
-        #self.querytime = QueryTime(active=True)
         self.querytime = QueryTime()
-        self.query.querytime = self.querytime  #TODO: if above line is correct, no need for this line.
+
+    @property
+    def querytime(self):
+        return self._querytime
+
+    @querytime.setter
+    def querytime(self, value=None):
+        if value:
+            self._querytime = value.clone()
+        else:
+            self._querytime = QueryTime()
+        self.query.querytime = self._querytime.clone()
 
     def __getitem__(self, k):
         """
@@ -401,9 +411,7 @@ class VersionedQuerySet(QuerySet):
                 kwargs['klass'] = klass
 
         clone = super(VersionedQuerySet, self)._clone(**kwargs)
-        clone.querytime = self.querytime.clone()
-        clone.query.querytime = clone.querytime
-
+        self._set_query_time(clone, False)
         return clone
 
     def _set_query_time(self, item, type_check=True):
@@ -418,7 +426,6 @@ class VersionedQuerySet(QuerySet):
             item._querytime = self.querytime.clone()
         elif isinstance(item, VersionedQuerySet):
             item.querytime = self.querytime
-            item.query.querytime = item.querytime
         elif isinstance(self, ValuesQuerySet):
             # When we are dealing with a ValueQuerySet there is no point in
             # setting the query_time as we are returning an array of values
@@ -437,7 +444,6 @@ class VersionedQuerySet(QuerySet):
         """
         clone = self._clone()
         clone.querytime = QueryTime(qtime, True)
-        clone.query.querytime = clone.querytime
         return clone
 
     # def add_as_of_filter(self, querytime):
