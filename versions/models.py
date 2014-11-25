@@ -355,9 +355,9 @@ class VersionedQuerySet(QuerySet):
         item = super(VersionedQuerySet, self).__getitem__(k)
         if isinstance(item, (list,)):
             for i in item:
-                self._propagate_querytime_to_item(i)
+                self._set_item_querytime(i)
         else:
-            self._propagate_querytime_to_item(item)
+            self._set_item_querytime(item)
         return item
 
     def _fetch_all(self):
@@ -369,7 +369,7 @@ class VersionedQuerySet(QuerySet):
             self._result_cache = list(self.iterator())
             if not isinstance(self, ValuesListQuerySet):
                 for x in self._result_cache:
-                    self._propagate_querytime_to_item(x)
+                    self._set_item_querytime(x)
         if self._prefetch_related_lookups and not self._prefetch_done:
             self._prefetch_related_objects()
 
@@ -400,7 +400,7 @@ class VersionedQuerySet(QuerySet):
         clone.querytime = self.querytime
         return clone
 
-    def _propagate_querytime_to_item(self, item, type_check=True):
+    def _set_item_querytime(self, item, type_check=True):
         """
         Sets the time for which the query was made on the resulting item
         :param item: an item of type Versionable
