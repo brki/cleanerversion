@@ -948,7 +948,7 @@ class Versionable(models.Model):
 
     def __init__(self, *args, **kwargs):
         super(Versionable, self).__init__(*args, **kwargs)
-        # _querytime is for library-internal use.  Use as_of to to read or set the query time.
+        # _querytime is for library-internal use.
         self._querytime = QueryTime(time=None, active=False)
 
     def delete(self, using=None):
