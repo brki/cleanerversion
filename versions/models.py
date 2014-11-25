@@ -15,6 +15,7 @@
 import copy
 import datetime
 import uuid
+from collections import namedtuple
 from django import VERSION
 
 if VERSION[:2] >= (1, 7):
@@ -40,25 +41,8 @@ from django.db import models, router
 def get_utc_now():
     return datetime.datetime.utcnow().replace(tzinfo=utc)
 
-class QueryTime(object):
-    def __init__(self, time=None, active=False):
-        self.time = time
-        self.active = active
 
-    def clone(self):
-        return QueryTime(self.time, self.active)
-
-    def __str__(self):
-        return '{}, time: {}'.format(
-            'active' if self.active else 'inactive',
-            self.time or 'None'
-        )
-
-    def __eq__(self, other):
-        return self.__dict__ == other.__dict__
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
+QueryTime = namedtuple('QueryTime', 'time active')
 
 
 class VersionManager(models.Manager):
@@ -301,12 +285,12 @@ class VersionedQuery(Query):
     def __init__(self, *args, **kwargs):
         kwargs['where'] = VersionedWhereNode
         super(VersionedQuery, self).__init__(*args, **kwargs)
-        self.querytime = QueryTime()
+        self.querytime = QueryTime(time=None, active=False)
 
     def clone(self, *args, **kwargs):
         _clone = super(VersionedQuery, self).clone(*args, **kwargs)
         try:
-            _clone.querytime = self.querytime.clone()
+            _clone.querytime = self.querytime
         except AttributeError:
             # If the caller is using clone to create a different type of Query, that's OK.
             # An example of this is when creating or updating an object, this method is called
@@ -346,19 +330,16 @@ class VersionedQuerySet(QuerySet):
         if not query:
             query = VersionedQuery(model)
         super(VersionedQuerySet, self).__init__(model=model, query=query, *args, **kwargs)
-        self.querytime = QueryTime()
+        self.querytime = QueryTime(time=None, active=False)
 
     @property
     def querytime(self):
         return self._querytime
 
     @querytime.setter
-    def querytime(self, value=None):
-        if value:
-            self._querytime = value.clone()
-        else:
-            self._querytime = QueryTime()
-        self.query.querytime = self._querytime.clone()
+    def querytime(self, value):
+        self._querytime = value
+        self.query.querytime = value
 
     def __getitem__(self, k):
         """
@@ -422,8 +403,7 @@ class VersionedQuerySet(QuerySet):
         :return: Returns the item itself with the time set
         """
         if isinstance(item, Versionable):
-#           item.as_of = self.querytime.time
-            item._querytime = self.querytime.clone()
+            item._querytime = self.querytime
         elif isinstance(item, VersionedQuerySet):
             item.querytime = self.querytime
         elif isinstance(self, ValuesQuerySet):
@@ -443,29 +423,8 @@ class VersionedQuerySet(QuerySet):
         :return: A VersionedQuerySet
         """
         clone = self._clone()
-        clone.querytime = QueryTime(qtime, True)
+        clone.querytime = QueryTime(time=qtime, active=True)
         return clone
-
-    # def add_as_of_filter(self, querytime):
-    #     """
-    #     Add a version time restriction filter to the given queryset.
-    #
-    #     If querytime = None, then the filter will simply restrict to the current objects (those
-    #     with version_end_date = NULL).
-    #
-    #     :param querytime: UTC datetime object, or None.
-    #     :return: VersionedQuerySet
-    #     """
-    #     #TODO: keep track of whether a querytime has already been added, and remove it if it has.
-    #     #     OR: keep track of the filters that should be added, and add them later (_filter... method)
-    #     if querytime:
-    #         self.query_time = querytime
-    #         filter = (Q(version_end_date__gt=querytime) | Q(version_end_date__isnull=True)) \
-    #                  & Q(version_start_date__lte=querytime)
-    #     else:
-    #         filter = Q(version_end_date__isnull=True)
-    #     #FIXME: adding a filter here when there is not change in the query time is removing the _result_cache:
-    #     return self.filter(filter)
 
     def values_list(self, *fields, **kwargs):
         """
@@ -655,14 +614,10 @@ class VersionedForeignRelatedObjectsDescriptor(ForeignRelatedObjectsDescriptor):
 
             def get_queryset(self):
                 queryset = super(VersionedRelatedManager, self).get_queryset()
-                # Do not set the query time if it is already correctly set.  as_of returns a clone
+                # Do not set the query time if it is already correctly set.  queryset.as_of returns a clone
                 # of the queryset, and this will destroy the prefetched objects cache if it exists.
-
-                #if self.instance._querytime.active and queryset.querytime.time != self.instance.as_of:
                 if self.instance._querytime.active and queryset.querytime != self.instance._querytime:
-                    queryset = queryset.as_of(self.instance.as_of)
-                # if self.instance.as_of is not None:
-                #     queryset = queryset.as_of(self.instance.as_of)
+                    queryset = queryset.as_of(self.instance._querytime.time)
                 return queryset
 
             def get_prefetch_queryset(self, instances, queryset=None):
@@ -994,8 +949,7 @@ class Versionable(models.Model):
 
     @as_of.setter
     def as_of(self, time):
-        self._querytime.active = True
-        self._querytime.time = time
+        self._querytime = QueryTime(time=time, active=True)
 
     class Meta:
         abstract = True
@@ -1003,7 +957,7 @@ class Versionable(models.Model):
 
     def __init__(self, *args, **kwargs):
         super(Versionable, self).__init__(*args, **kwargs)
-        self._querytime = QueryTime()
+        self._querytime = QueryTime(time=None, active=False)
 
     def delete(self, using=None):
         self._delete_at(get_utc_now(), using)
