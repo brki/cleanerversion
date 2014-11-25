@@ -19,5 +19,10 @@ dist/*
 build/*
 *.egg-info
 
+# Ignore testing output
+.coverage
+.tox
+
 # dev_no_debug.py imports local.py and disables Django-debugging
 cleanerversion/settings/dev_no_debug.py
+cleanerversion/settings/*_local.py
