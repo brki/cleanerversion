@@ -946,14 +946,6 @@ class Versionable(models.Model):
         abstract = True
         unique_together = ('id', 'identity')
 
-    @property
-    def as_of(self):
-        return self._querytime.time
-
-    @as_of.setter
-    def as_of(self, time):
-        self._querytime = QueryTime(time=time, active=True)
-
     def __init__(self, *args, **kwargs):
         super(Versionable, self).__init__(*args, **kwargs)
         # _querytime is for library-internal use.  Use as_of to to read or set the query time.
@@ -982,6 +974,14 @@ class Versionable(models.Model):
     @property
     def is_current(self):
         return self.version_end_date is None
+
+    @property
+    def as_of(self):
+        return self._querytime.time
+
+    @as_of.setter
+    def as_of(self, time):
+        self._querytime = QueryTime(time=time, active=True)
 
     def _clone_at(self, timestamp):
         """
