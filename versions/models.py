@@ -58,7 +58,10 @@ class VersionManager(models.Manager):
 
         :return: VersionedQuerySet
         """
-        return VersionedQuerySet(self.model, using=self._db)
+        qs = VersionedQuerySet(self.model, using=self._db)
+        if hasattr(self, 'instance'):
+            qs.querytime = self.instance._querytime
+        return qs
 
     def as_of(self, time=None):
         """
@@ -619,13 +622,6 @@ class VersionedForeignRelatedObjectsDescriptor(ForeignRelatedObjectsDescriptor):
                 if self.instance._querytime.active and queryset.querytime != self.instance._querytime:
                     queryset = queryset.as_of(self.instance._querytime.time)
                 return queryset
-
-            def get_prefetch_queryset(self, instances, queryset=None):
-                if queryset is None:
-                    queryset = self.get_queryset()
-                rel_qs, rel_obj_attr, instance_attr, single, cache_name = (
-                    super(VersionedRelatedManager, self).get_prefetch_queryset(instances, queryset))
-                return rel_qs, rel_obj_attr, instance_attr, single, cache_name
 
             def add(self, *objs):
                 cloned_objs = ()
