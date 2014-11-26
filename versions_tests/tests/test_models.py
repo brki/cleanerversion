@@ -1607,6 +1607,8 @@ class PrefetchingTests(TestCase):
         with self.assertNumQueries(3):
             team = Team.objects.as_of(self.t1).prefetch_related('player_set', 'city').first()
             self.assertIsNotNone(team)
+
+        with self.assertNumQueries(0):
             p1 = team.player_set.all()[0]
             p2 = team.player_set.all()[1]
             self.assertEqual(self.city1, team.city)
@@ -1620,6 +1622,8 @@ class PrefetchingTests(TestCase):
         with self.assertNumQueries(3):
             team = Team.objects.current.prefetch_related('player_set', 'city').first()
             self.assertIsNotNone(team)
+
+        with self.assertNumQueries(0):
             self.assertEqual(2, len(team.player_set.all()))
             p1 = team.player_set.all()[0]
             p2 = team.player_set.all()[1]
@@ -1628,6 +1632,8 @@ class PrefetchingTests(TestCase):
         with self.assertNumQueries(3):
             team = Team.objects.prefetch_related('player_set', 'city').first()
             self.assertIsNotNone(team)
+
+        with self.assertNumQueries(0):
             self.assertEqual(4, len(team.player_set.all()))
             px = team.player_set.all()[1]
             self.assertEqual(self.city1, team.city)
