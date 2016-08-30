@@ -2546,3 +2546,105 @@ class DetachTest(TestCase):
         t = Team.objects.current.get(pk=t_pk)
         self.assertEqual({p, p2}, set(t.player_set.all()))
         self.assertEqual([], list(t2.player_set.all()))
+
+class IntervalQueryingTest(TestCase):
+
+    def setUp(self):
+        self.encompasses_interval_non_terminated = City.objects.create(name="Rome")
+        self.encompasses_interval_terminated = City.objects.create(name="Beichuan")
+        self.doomed_city = City.objects.create(name="Carthage")
+        self.doomed_city = self.doomed_city.clone()
+        self.doomed_city.delete()
+        self.overlaps_start = City.objects.create(name="Palenque")
+        sleep(0.001)
+        self.t0 = get_utc_now()
+        #  Big interval starts here
+
+        sleep(0.001)
+        self.only_exists_in_interval = City.objects.create(name="Indecisiveness")
+        self.t1 = get_utc_now()
+
+        sleep(0.001)
+        self.only_exists_in_interval = self.only_exists_in_interval.clone()
+        self.only_exists_in_interval.name = "Indecisive"
+        self.only_exists_in_interval.save()
+        self.t2 = get_utc_now()
+
+        sleep(0.001)
+        self.only_exists_in_interval = self.only_exists_in_interval.clone()
+        self.only_exists_in_interval.name = "Umm"
+        self.only_exists_in_interval.save()
+        self.t3 = get_utc_now()
+
+        sleep(0.001)
+        self.overlaps_start.delete()
+        self.overlaps_end_non_terminated = City.objects.create(name="San Francisco")
+        self.only_exists_in_interval = self.only_exists_in_interval.clone()
+        self.only_exists_in_interval.name = "Anyone here?"
+        self.only_exists_in_interval.save()
+        self.t4 = get_utc_now()
+
+        sleep(0.001)
+        self.overlaps_end_terminated = City.objects.create(name="Bodie")
+        self.only_exists_in_interval.delete()
+        self.t5 = get_utc_now()
+        #  Big interval ends here
+
+        sleep(0.001)
+        bodie_v2 = self.overlaps_end_terminated.clone()
+        bodie_v2.name += '-v2'
+        bodie_v2.save()
+        bodie_v2.delete()
+        self.encompasses_interval_terminated.delete()
+        self.newer_city = City.objects.create(name="Eko Atlantic")
+        self.newer_terminated_city = City.objects.create(name="Eko Pacific")
+        self.t6 = get_utc_now()
+
+        sleep(0.001)
+        self.newer_terminated_city.delete()
+
+    def test_simple_model_interval(self):
+
+        city_versions = City.objects.in_interval(self.t1, self.t3, unique=False)
+
+        self.assertSetEqual(
+            {'Indecisiveness', 'Indecisive', 'Umm', 'Rome', 'Palenque', 'Beichuan'},
+            {c.name for c in city_versions})
+        self.assertEqual(4, len({c.identity for c in city_versions}))
+
+        big_interval_cities = City.objects.in_interval(self.t0, self.t5, unique=False)
+        self.assertEqual(6, len({c.identity for c in big_interval_cities}))
+        self.assertEqual(9, len(big_interval_cities))
+        self.assertSetEqual(
+            {self.encompasses_interval_terminated.identity,
+             self.encompasses_interval_non_terminated.identity,
+             self.overlaps_start.identity,
+             self.only_exists_in_interval.identity,
+             self.overlaps_end_non_terminated.identity,
+             self.overlaps_end_terminated.identity},
+            {c.identity for c in big_interval_cities}
+        )
+
+    def test_interval_with_unique(self):
+        big_interval_cities = City.objects.in_interval(self.t0, self.t5, unique=True)
+        self.assertEqual(6, len(big_interval_cities))
+        self.assertEqual(6, len({c.identity for c in big_interval_cities}))
+        self.assertSetEqual(
+            {self.encompasses_interval_terminated.identity,
+             self.encompasses_interval_non_terminated.identity,
+             self.overlaps_start.identity,
+             self.only_exists_in_interval.identity,
+             self.overlaps_end_non_terminated.identity,
+             self.overlaps_end_terminated.identity},
+            {c.identity for c in big_interval_cities}
+        )
+
+        latest_version = big_interval_cities.filter(identity=self.only_exists_in_interval.identity)
+        self.assertEqual(1, len(latest_version))
+        self.assertEquals("Anyone here?", latest_version[0].name)
+
+        latest_version = big_interval_cities.filter(identity=self.overlaps_end_terminated.identity)
+        self.assertEqual(1, len(latest_version))
+        bodie = latest_version[0]
+        self.assertEquals("Bodie", bodie.name)
+        self.assertFalse(bodie.is_current)

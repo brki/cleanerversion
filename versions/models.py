@@ -22,10 +22,11 @@ from django import VERSION
 
 if VERSION[:2] >= (1, 8):
     from django.db.models.sql.datastructures import Join
+    from django.db.models.expressions import RawSQL
 if VERSION[:2] >= (1, 7):
     from django.apps.registry import apps
 from django.core.exceptions import SuspiciousOperation, ObjectDoesNotExist
-from django.db import transaction
+from django.db import transaction, connections
 from django.db.models.base import Model
 from django.db.models import Q
 from django.db.models.constants import LOOKUP_SEP
@@ -52,6 +53,10 @@ def get_utc_now():
     return datetime.datetime.utcnow().replace(tzinfo=utc)
 
 
+def db_vendor(connection_string):
+    return connections[connection_string].vendor
+
+
 class SimpleEqualityMixin(object):
     def __eq__(self, other):
         return type(self) == type(other) and self.__dict__ == other.__dict__
@@ -67,10 +72,16 @@ class QueryTimeInterval(SimpleEqualityMixin):
     """If true, only include last version, otherwise include all versions in interval"""
 
     def __init__(self, start_time, end_time, unique=False):
-        if not (isinstance(start_time, datetime) and isinstance(end_time, datetime)):
+        if not (isinstance(start_time, datetime.datetime) and isinstance(end_time, datetime.datetime)):
             raise ValueError("start_time and end_time parameters need to be datetime objects")
-        if not start_time <= datetime:
-            raise ValueError("start_time must not be later than end_time")
+        if end_time < start_time:
+            raise ValueError("start_time ({}) must not be later than end_time ({})".format(
+                start_time, end_time
+            ))
+        if unique:
+            assert (VERSION[:2] >= (1, 8)), \
+            "Unique option for interval queries is only available when using Django >= 1.8"
+
         self.start_time = start_time
         self.end_time = end_time
         self.unique = unique
@@ -146,6 +157,19 @@ class VersionManager(models.Manager):
         :return: A QuerySet containing the base for a timestamped query.
         """
         return self.get_queryset().as_of(time)
+
+    def in_interval(self, start, end, unique=False):
+        """
+        Filters Versionables present in a given interval.
+
+        :param datetime start: The timestamp (including timezone info) representing the beginning of the interval.
+        :param datetime end: The timestamp (including timezone info) representing the end of the interval.
+        :param bool unique: If true, find only the latest matching version, otherwise find all matching versions.
+        :return: A QuerySet containing the base for a timestamped query.
+        """
+        interval = QueryTimeInterval(start_time=start, end_time=end, unique=unique)
+        querytime = QueryTime(type=QueryTime.TYPE_INTERVAL, active=True, interval=interval)
+        return self.get_queryset().with_querytime(querytime)
 
     def with_querytime(self, querytime):
         """
@@ -437,7 +461,7 @@ class VersionedExtraWhere(ExtraWhere):
     """
     A specific implementation of ExtraWhere;
     Before as_sql can be called on an object, ensure that calls to
-    - set_as_of and
+    - set_querytime and
     - set_joined_alias
     have been done
     """
@@ -530,11 +554,12 @@ class VersionedQuery(Query):
         (e.g. by adding a filter to the queryset) does not allow the caching of related
         object to work (they are attached to a queryset; filter() returns a new queryset).
         """
-        if self.querytime.active and (not hasattr(self, '_querytime_filter_added') or not self._querytime_filter_added):
+        if self.querytime.active and not getattr(self, '_querytime_filter_added', False):
+            using = kwargs.get('using', 'default')
             if self.querytime.type == QueryTime.TYPE_POINT_IN_TIME:
                 self.add_point_in_time_filter()
             elif self.querytime.type == QueryTime.TYPE_INTERVAL:
-                self.add_interval_filter()
+                self.add_interval_filter(using)
             else:
                 raise RuntimeError("Unrecognized QueryTime.type")
 
@@ -553,19 +578,81 @@ class VersionedQuery(Query):
                 & Q(version_start_date__lte=time)
             )
 
-    def add_interval_filter(self):
-        interval = self.querytime.interval
+    def add_interval_filter(self, using):
+        """
+        Adds a filter to select only those versions of objects that occur in the interval defined
+        by self.querytime.interval.
 
-        current_version_intersects = Q(version_end_date__isnull=True, version_start_date__lte=interval.end_time)
-        encompasses_interval = Q(version_start_date__lt=interval.start_time, version_end_date__gt=interval.end_time)
-        intersects_interval = Q(
-            version_start_date__gte=interval.start_time,
-            version_start_date__lte=interval.end_time) | Q(
-            version_end_date__gte=interval.start_time,
-            version_end_date__lte=interval.end_time
-        )
-        terminated_version_matches = Q(version_end_date__isnull=False) & (encompasses_interval | intersects_interval)
-        self.add_q(current_version_intersects | terminated_version_matches)
+        :param str using: name of DB connection as defined in the settings (for example 'default').
+        :return:
+        """
+        interval = self.querytime.interval
+        if interval.unique:
+            self.add_interval_unique_filter(interval, using)
+        else:
+            starts_before_end = Q(version_start_date__lt=interval.end_time)
+            ends_after_start = Q(version_end_date__isnull=True) | Q(version_end_date__gte=interval.start_time)
+            self.add_q(starts_before_end & ends_after_start)
+
+    def add_interval_unique_filter(self, interval, using):
+        """
+        Adds a filter to select only the most recent version of the objects in the interval.
+
+        :param QueryTimeInterval interval: interval
+        :param str using: name of DB connection as defined in the settings (for example 'default').
+        :return:
+        """
+        table_name = self.get_meta().db_table
+
+        if db_vendor(using) == 'postgresql':
+            # Use postgresql-specific syntax, that should be faster than generic sql.
+            raw_sql = """
+                    SELECT t.id FROM (
+                        SELECT id, rank() OVER
+                                (PARTITION BY identity
+                                  ORDER BY version_end_date IS NULL DESC, version_end_date DESC
+                                ) AS rank
+                          FROM {table}
+                          WHERE version_start_date < %s
+                            AND (version_end_date IS NULL OR version_end_date >= %s)
+                            ) t
+                    WHERE t.rank = 1
+                """.format(table=table_name)
+            latest_restriction = Q(id__in=RawSQL(raw_sql, [interval.end_time, interval.start_time]))
+        else:
+            # Note this makes a separate query to first get the ids of the latest versions.
+            # For some reason it didn't work on sqlite when using a subquery to provide the
+            # list of ids.
+            # It also suffers from a year 10000 bug.
+            far_future = datetime.datetime(year=9999, month=12, day=31, tzinfo=utc)
+            raw_sql = """
+                SELECT vtc1.id
+                FROM  {table} vtc1
+                  LEFT OUTER JOIN {table} vtc2
+                    ON (
+                        vtc2.version_start_date < %s
+                        AND (vtc2.version_end_date IS NULL OR vtc2.version_end_date >= %s)
+                        AND vtc1.identity = vtc2.identity
+                        AND (CASE WHEN vtc1.version_end_date IS NULL THEN %s ELSE vtc1.version_end_date END) <
+                            (CASE WHEN vtc2.version_end_date IS NULL THEN %s ELSE vtc2.version_end_date END)
+                      )
+                WHERE vtc2.id IS NULL
+                  AND vtc1.version_start_date < %s
+                  AND (vtc1.version_end_date IS NULL OR vtc1.version_end_date >= %s)
+            """.format(table=table_name)
+
+            params = [
+                interval.end_time, interval.start_time,  # t2 interval restrictions
+                far_future, far_future,  # far future date replaces null version_end_date for comparison
+                interval.end_time, interval.start_time  # t1 interval restrictions
+            ]
+
+            with connections[using].cursor() as c:
+                c.execute(raw_sql, params)
+                id_list = [row[0] for row in c.fetchall()]
+            if id_list:
+                latest_restriction = Q(id__in=id_list)
+                self.add_q(latest_restriction)
 
     def build_filter(self, filter_expr, **kwargs):
         """
