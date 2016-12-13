@@ -1506,7 +1506,8 @@ class VersionedManyToManyModel(object):
         :param kwargs: Required by Django definition
         :return: None
         """
-        if isinstance(instance, sender) and isinstance(instance, Versionable):
+        if isinstance(instance, sender) and isinstance(instance, Versionable) \
+                and len(instance.get_deferred_fields()) == 0:
             ident = Versionable.uuid()
             now = get_utc_now()
             if not hasattr(instance, 'version_start_date') or instance.version_start_date is None:
